@@ -1,1 +1,2 @@
-APP test for red color and text
+紅包記帳系統
+
