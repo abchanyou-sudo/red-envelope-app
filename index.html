@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#dc2626" />
+  <title>紅包記帳系統</title>
+
+  <!-- 將以程式動態掛上 manifest（確保路徑正確） -->
+  <link rel="apple-touch-icon" sizes="192x192" id="apple-192" />
+  <link rel="apple-touch-icon" sizes="512x512" id="apple-512" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="紅包記帳" />
+
+  <!-- React / Babel -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-white text-gray-800">
+  <div id="root"></div>
+
+  <!-- Demo React App（可替換） -->
+  <script type="text/babel">
+    function App(){
+      const [amount, setAmount] = React.useState(() => localStorage.getItem('giftbook-last') || '');
+      const save = () => {
+        localStorage.setItem('giftbook-last', amount);
+        alert('已儲存到本機（localStorage）');
+      };
+      return (
+        <div className="max-w-md mx-auto p-4">
+          <h1 className="text-2xl font-bold text-red-600 mb-4">紅包記帳系統</h1>
+          <input
+            className="w-full border rounded p-2 mb-3"
+            placeholder="輸入金額..."
+            value={amount}
+            onChange={(e)=>setAmount(e.target.value)}
+            inputMode="numeric"
+          />
+          <button onClick={save} className="px-4 py-2 rounded bg-red-600 text-white">儲存</button>
+          <p className="mt-3 text-sm text-gray-500">資料儲存在本機（localStorage）。</p>
+        </div>
+      );
+    }
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App/>);
+  </script>
+
+  <!-- 動態 basePath / manifest / service worker 註冊 -->
+  <script>
+    (function(){
+      // 自動偵測：
+      // - 使用者/組織頁面： https://user.github.io/ （basePath = '/'）
+      // - 專案頁面： https://user.github.io/repo/ （basePath = '/repo/'）
+      function detectBasePath(){
+        const p = location.pathname;
+        // 以 GitHub Pages 慣例：/repo/ 下至少兩段（空白 + repo）
+        const parts = p.split('/').filter(Boolean); // 去除空字串
+        if (parts.length === 0) return '/';
+        // 若是 project pages，第一段通常是 repo 名稱
+        return '/' + parts[0] + '/';
+      }
+      const basePath = detectBasePath();
+
+      // 掛上 Apple Icon 連結
+      document.getElementById('apple-192').setAttribute('href', basePath + 'icon-192.png');
+      document.getElementById('apple-512').setAttribute('href', basePath + 'icon-512.png');
+
+      // 產生動態 manifest（確保 icons / start_url / scope 都帶 basePath）
+      const manifest = {
+        name: "紅包記帳系統",
+        short_name: "紅包記帳",
+        description: "智能辨識台幣鈔票並記錄紅包金額",
+        start_url: basePath,
+        scope: basePath,
+        display: "standalone",
+        background_color: "#ffffff",
+        theme_color: "#dc2626",
+        orientation: "portrait",
+        icons: [
+          { src: basePath + "icon-192.png", sizes: "192x192", type: "image/png", purpose: "any maskable" },
+          { src: basePath + "icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" }
+        ]
+      };
+      const manifestBlob = new Blob([JSON.stringify(manifest)], {type: 'application/json'});
+      const manifestURL = URL.createObjectURL(manifestBlob);
+      const link = document.createElement('link');
+      link.rel = 'manifest';
+      link.href = manifestURL;
+      document.head.appendChild(link);
+
+      // 註冊 Service Worker（使用 basePath）
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register(basePath + 'service-worker.js', { scope: basePath })
+            .then((reg) => {
+              console.log('Service Worker 註冊成功', reg.scope);
+              // 提示新版本
+              reg.addEventListener('updatefound', () => {
+                const nw = reg.installing;
+                nw && nw.addEventListener('statechange', () => {
+                  if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+                    if (confirm('有新版本可用，是否立即更新？')) location.reload();
+                  }
+                });
+              });
+            })
+            .catch(err => console.error('Service Worker 註冊失敗', err));
+        });
+      }
+    })();
+  </script>
+</body>
+</html>
