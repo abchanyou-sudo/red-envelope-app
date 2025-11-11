@@ -1,5 +1,5 @@
 // service-worker.js
-const VERSION = 'v2.1.0';
+const VERSION = 'v2.2.0';
 
 function url(p){ return new URL(p, self.registration.scope).toString(); }
 

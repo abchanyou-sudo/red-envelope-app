@@ -27,6 +27,7 @@
     video, canvas { max-width: 100%; border-radius: 0.5rem; }
     .badge { padding:.1rem .5rem; border-radius:.5rem; font-size:.75rem; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .chip { display:inline-block; padding:.2rem .5rem; border:1px solid #eee; border-radius:.5rem; margin-right:.4rem; margin-bottom:.3rem; }
   </style>
 </head>
 <body class="bg-white text-gray-800">
@@ -132,16 +133,15 @@
     }
 
     // ---------- OCR Utilities ----------
-    // 合法面額集合（可擴充 2000）
-    const ALLOWED = new Set([100, 200, 500, 1000]);
+    const ALLOWED = [100, 200, 500, 1000]; // allowed denominations
+    const ALLOWED_SET = new Set(ALLOWED);
 
-    // 中文大寫映射
     const CN_MAP = {
       "壹佰": 100, "貳佰": 200, "伍佰": 500, "壹仟": 1000,
       "壹百": 100, "貳百": 200, "伍百": 500, "壹千": 1000
     };
 
-    // 從影像估計主色相（簡化取樣）
+    // Estimate dominant color bucket for fallback
     async function estimateDominantHue(dataUrl){
       const img = new Image();
       img.crossOrigin = 'anonymous';
@@ -153,36 +153,31 @@
           cv.width = W; cv.height = H;
           ctx.drawImage(img, 0, 0, W, H);
           const { data } = ctx.getImageData(0, 0, W, H);
-          let sumH = 0, cnt = 0, reds = 0, greens = 0, blues = 0, browns = 0;
-          for (let i = 0; i < data.length; i += 16) { // 跳采樣提速
-            const r = data[i]/255, g = data[i+1]/255, b = data[i+2]/255;
-            const max = Math.max(r,g,b), min = Math.min(r,g,b);
-            const v = max, s = max === 0 ? 0 : (max-min)/max;
-            if (s < 0.2 || v < 0.2) continue; // 去除灰暗
-            let h = 0;
-            if (max !== min) {
-              const d = max - min;
-              if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
-              else if (max === g) h = (b - r) / d + 2;
-              else h = (r - g) / d + 4;
-              h *= 60;
+          let reds=0, greens=0, blues=0, browns=0;
+          for (let i=0;i<data.length;i+=16){
+            const r=data[i]/255, g=data[i+1]/255, b=data[i+2]/255;
+            const max=Math.max(r,g,b), min=Math.min(r,g,b);
+            const v=max, s=max===0?0:(max-min)/max;
+            if (s<0.2||v<0.2) continue;
+            let h=0;
+            if (max!==min){
+              const d=max-min;
+              if (max===r) h=(g-b)/d+(g<b?6:0);
+              else if (max===g) h=(b-r)/d+2;
+              else h=(r-g)/d+4;
+              h*=60;
             }
-            sumH += h; cnt++;
-            // 色系計數（簡單分群）
-            if (h <= 20 || h >= 340) reds++;
-            else if (h >= 80 && h <= 160) greens++;
-            else if (h >= 190 && h <= 250) blues++;
-            else if (h >= 20 && h <= 50) browns++;
+            if (h<=20||h>=340) reds++;
+            else if (h>=80&&h<=160) greens++;
+            else if (h>=190&&h<=250) blues++;
+            else if (h>=20&&h<=50) browns++;
           }
-          if (!cnt) return resolve({ hue: null, bucket: null });
-          const avgH = sumH / cnt;
-          let bucket = 'other';
-          let maxBucket = Math.max(reds, greens, blues, browns);
-          if (maxBucket === reds) bucket = 'red';
-          else if (maxBucket === greens) bucket = 'green';
-          else if (maxBucket === blues) bucket = 'blue';
-          else if (maxBucket === browns) bucket = 'brown';
-          resolve({ hue: avgH, bucket });
+          let bucket='other', m=Math.max(reds,greens,blues,browns);
+          if (m===reds) bucket='red';
+          else if (m===greens) bucket='green';
+          else if (m===blues) bucket='blue';
+          else if (m===browns) bucket='brown';
+          resolve({ bucket });
         };
         img.onerror = reject;
       });
@@ -190,56 +185,34 @@
       return p;
     }
 
-    // 依主色推測面額
-    function amountByColor(bucket){
-      if (bucket === 'red') return 100;
-      if (bucket === 'green') return 200;
-      if (bucket === 'brown') return 500;
-      if (bucket === 'blue') return 1000;
+    function guessByColor(bucket){
+      if (bucket==='red') return 100;
+      if (bucket==='green') return 200;
+      if (bucket==='brown') return 500;
+      if (bucket==='blue') return 1000;
       return null;
     }
 
-    // 從 OCR 文字中提取合理面額（避免撿到 71、序號等）
-    async function extractAmountSmart(text, dataUrl){
-      // 1) 中文大寫優先
-      for (const k of Object.keys(CN_MAP)) {
-        if (text.includes(k)) return CN_MAP[k];
+    // Extract ALL allowed denominations from OCR text (Arabic + Chinese)
+    function extractAllDenoms(text){
+      const found = [];
+      // Chinese uppercase
+      for (const [k,v] of Object.entries(CN_MAP)){
+        const re = new RegExp(k, 'g');
+        const matches = text.match(re);
+        if (matches) for (let i=0;i<matches.length;i++) found.push(v);
       }
-
-      // 2) 移除貨幣代碼與常見誤字母
-      let cleaned = text.replace(/[,\s]/g, '')
-                        .replace(/NTD|TWD|NT|\$|元/g, '')
-                        .replace(/[Oo]/g, '0')
-                        .replace(/[Il]/g, '1');
-
-      // 3) 收集所有 3~4 位數（因你的面額集合），再篩 ALLOWED
-      const matches = cleaned.match(/\d{3,4}/g) || [];
-      const candidates = matches.map(n => parseInt(n, 10)).filter(n => ALLOWED.has(n));
-
-      if (candidates.length === 1) return candidates[0];
-      if (candidates.length > 1) {
-        // 多個候選：選最大者（通常面額字最大/最清楚），或 1000>500>200>100 的優先序
-        const order = [1000, 500, 200, 100];
-        for (const v of order) if (candidates.includes(v)) return v;
+      // Normalized Arabic digits
+      let cleaned = text.replace(/[,\s]/g,'')
+                        .replace(/NTD|TWD|NT|\$|元|圓|塊|元整/g,'')
+                        .replace(/[Oo]/g,'0')
+                        .replace(/[Il]/g,'1');
+      const m = cleaned.match(/\d{3,4}/g) || [];
+      for (const t of m){
+        const n = parseInt(t,10);
+        if (ALLOWED_SET.has(n)) found.push(n);
       }
-
-      // 4) 若沒有合格數字，試著用顏色主題猜測
-      if (dataUrl) {
-        try {
-          const { bucket } = await estimateDominantHue(dataUrl);
-          const guess = amountByColor(bucket);
-          if (guess) return guess;
-        } catch {}
-      }
-
-      // 5) 仍無：回傳 null 代表需要人工輸入
-      return null;
-    }
-
-    // 文字清理：抽取姓名（2~4 連續中文字）
-    function extractName(text){
-      const m = text.match(/[\u4e00-\u9fff]{2,4}/);
-      return m ? m[0] : '';
+      return found;
     }
 
     async function warmupOCR(){
@@ -255,20 +228,19 @@
       const cam = useCamera();
       const [busy, setBusy] = React.useState(false);
       const [langReady, setLangReady] = React.useState(false);
-      const [diag, setDiag] = React.useState({ sw: '未知', scope: '' });
 
       const [name, setName] = React.useState('');
-      const [amount, setAmount] = React.useState('');
       const [code, setCode] = React.useState(loadSeq());
       const [entries, setEntries] = React.useState(loadEntries());
 
+      // multi-bill state
+      const [breakdown, setBreakdown] = React.useState({100:0, 200:0, 500:0, 1000:0});
+      const total = breakdown[100]*100 + breakdown[200]*200 + breakdown[500]*500 + breakdown[1000]*1000;
+      const totalCount = breakdown[100] + breakdown[200] + breakdown[500] + breakdown[1000];
+
       React.useEffect(() => {
         if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.register(basePath + 'service-worker.js', { scope: basePath })
-            .then(reg => setDiag({ sw: '已註冊', scope: reg.scope }))
-            .catch(err => setDiag({ sw: '註冊失敗：' + err.message, scope: '' }));
-        } else {
-          setDiag({ sw: '不支援', scope: '' });
+          navigator.serviceWorker.register(basePath + 'service-worker.js', { scope: basePath });
         }
       }, []);
 
@@ -281,29 +253,47 @@
         finally { setBusy(false); }
       };
 
+      const applyFound = (list, colorBucket=null) => {
+        const next = {100:0,200:0,500:0,1000:0};
+        for (const v of list) next[v]++;
+        // 若完全沒抓到，嘗試用顏色猜 1 張
+        if (list.length===0 && colorBucket){
+          const guess = guessByColor(colorBucket);
+          if (guess) next[guess] = 1;
+        }
+        setBreakdown(next);
+      };
+
       const runOCR = async (dataUrl) => {
         setBusy(true);
         try {
           const w = await Tesseract.createWorker();
           await w.loadLanguage('chi_tra+eng');
           await w.initialize('chi_tra+eng');
-          // 嘗試兩階段：先限制數字，再通用
-          await w.setParameters({ tessedit_char_whitelist: '0123456789', tessedit_pageseg_mode: '6' });
+
+          // Two-pass: digits-first then general
+          await w.setParameters({ tessedit_char_whitelist:'0123456789', tessedit_pageseg_mode:'6' });
           const r1 = await w.recognize(dataUrl);
           const digitsText = r1.data.text || '';
-          // 再跑通用，補姓名
-          await w.setParameters({ tessedit_char_whitelist: '', tessedit_pageseg_mode: '6' });
+
+          await w.setParameters({ tessedit_char_whitelist:'', tessedit_pageseg_mode:'6' });
           const r2 = await w.recognize(dataUrl);
-          const fullText = (r1.data.text || '') + '\n' + (r2.data.text || '');
+          const fullText = (r1.data.text||'') + '\n' + (r2.data.text||'');
           await w.terminate();
 
-          // 抽姓名
-          const nn = extractName(fullText);
-          if (nn) setName(nn);
+          // name (optional)
+          const nm = (fullText.match(/[\u4e00-\u9fff]{2,4}/) || [null])[0];
+          if (nm) setName(nm);
 
-          // 抽金額（安全過濾 + 顏色提示）
-          const amt = await extractAmountSmart(digitsText + '\n' + fullText, dataUrl);
-          if (amt != null) setAmount(String(amt));
+          // extract ALL denominations
+          const list = extractAllDenoms(digitsText + '\n' + fullText);
+
+          // color fallback
+          let bucket = null;
+          if (list.length === 0) {
+            try { const res = await estimateDominantHue(dataUrl); bucket = res.bucket; } catch {}
+          }
+          applyFound(list, bucket);
         } catch (e) {
           alert('辨識失敗：' + e.message);
         } finally {
@@ -311,7 +301,7 @@
         }
       };
 
-      // 選照片：分「拍照」與「相簿」兩個入口
+      // File inputs
       const onPickFromCamera = async (ev) => {
         await ensureLang(); if (!langReady) return;
         const file = ev.target.files?.[0]; if (!file) return;
@@ -328,7 +318,6 @@
         reader.readAsDataURL(file);
         ev.target.value = "";
       };
-
       const onSnapAndRecognize = async () => {
         await ensureLang(); if (!langReady) return;
         const dataUrl = cam.snap();
@@ -336,33 +325,46 @@
         await runOCR(dataUrl);
       };
 
+      const resetBreakdown = () => setBreakdown({100:0,200:0,500:0,1000:0});
+
       const addEntry = () => {
-        if (!name && !amount) { alert('請先輸入或辨識出「名字」或「金額」。'); return; }
+        if (total === 0) { alert('尚未辨識到任何面額，請先辨識或手動編修明細。'); return; }
         const now = new Date();
-        const entry = { id: now.getTime(), dateISO: now.toISOString(), code, name, amount: amount?Number(amount):'' };
+        const entry = {
+          id: now.getTime(),
+          dateISO: now.toISOString(),
+          code,
+          name,
+          total,
+          c100: breakdown[100], c200: breakdown[200], c500: breakdown[500], c1000: breakdown[1000],
+        };
         const next = [entry, ...entries];
         setEntries(next); saveEntries(next);
+
+        // 編碼 +1、清空一次性狀態
         const nextCode = (Number(code) || 0) + 1;
         setCode(nextCode); saveSeq(nextCode);
-        setName(''); setAmount('');
+        setName('');
+        resetBreakdown();
       };
 
-      const resetCode = () => {
-        if (confirm('確定要把「編碼」重設為 1 嗎？')) { setCode(1); saveSeq(1); }
-      };
-
-      const removeEntry = (id) => {
-        const next = entries.filter(e => e.id !== id);
-        setEntries(next); saveEntries(next);
-      };
-
+      // CSV export
       const exportCSV = () => {
-        const header = ['日期','編碼','名字','金額'];
-        const rows = entries.map(e => [new Date(e.dateISO).toLocaleString(), e.code, e.name, e.amount]);
+        const header = ['日期','編碼','名字','總張數','總金額','100張','200張','500張','1000張'];
+        const rows = entries.map(e => [
+          new Date(e.dateISO).toLocaleString(),
+          e.code, e.name || '', (e.c100+e.c200+e.c500+e.c1000),
+          e.total, e.c100, e.c200, e.c500, e.c1000
+        ]);
         const csv = [header, ...rows].map(r => r.map(x => `"${(x??'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
         const url = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8;'}));
         const a = Object.assign(document.createElement('a'), { href:url, download:'giftbook.csv' });
         document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+      };
+
+      // Manual adjust UI piece
+      const adjust = (d, delta) => {
+        setBreakdown(b => ({ ...b, [d]: Math.max(0, (b[d]||0) + delta) }));
       };
 
       return (
@@ -377,17 +379,8 @@
             </div>
           </div>
 
-          <details className="p-3 border rounded-md">
-            <summary className="cursor-pointer">說明 / 診斷（展開）</summary>
-            <div className="text-sm text-gray-600 mt-2 space-y-1">
-              <div>．**金額** 只接受 100/200/500/1000，避免抓到序號與「71」等誤判。</div>
-              <div>．會結合「主色」判斷（紅=100、綠=200、咖啡=500、藍=1000）。</div>
-              <div>．首次辨識需網路下載 OCR 語言檔；之後可能離線可用（視瀏覽器快取）。</div>
-            </div>
-          </details>
-
-          <div className="space-y-2 p-3 border rounded-lg">
-            <div className="font-semibold">相片/相機</div>
+          <div className="p-3 border rounded-lg space-y-2">
+            <div className="font-semibold">相片/相機（一次多張紙鈔）</div>
             <div className="flex gap-2 flex-wrap">
               <label className="px-3 py-2 rounded border cursor-pointer">
                 拍照
@@ -408,24 +401,28 @@
             {busy && <div className="text-sm text-gray-500">載入/辨識中（首次需要網路下載 OCR 語言檔）...</div>}
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
-            <div className="col-span-1">
-              <label className="text-sm text-gray-600">編碼（自動）</label>
-              <div className="flex items-center gap-2">
-                <input className="w-full border rounded p-2 mono" value={code} onChange={e=>setCode(e.target.value)} inputMode="numeric" />
-                <button onClick={resetCode} className="px-2 py-2 rounded border text-xs">重設為 1</button>
+          <div className="p-3 border rounded-lg space-y-3">
+            <div className="font-semibold">辨識結果（可手動調整）</div>
+            <div className="flex flex-wrap gap-2">
+              {ALLOWED.map(v => (
+                <div key={v} className="chip">
+                  <span className="mono">${v}</span>
+                  <button className="ml-2 px-2 border rounded" onClick={()=>adjust(v, -1)}>-</button>
+                  <span className="mx-2">{breakdown[v]}</span>
+                  <button className="px-2 border rounded" onClick={()=>adjust(v, +1)}>+</button>
+                </div>
+              ))}
+            </div>
+            <div className="text-sm text-gray-600">共 <b>{totalCount}</b> 張；總金額 <b className="mono">${total}</b></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm text-gray-600">名字（可選）</label>
+                <input className="w-full border rounded p-2" value={name} onChange={e=>setName(e.target.value)} placeholder="例如：王小明" />
               </div>
-            </div>
-            <div className="col-span-1">
-              <label className="text-sm text-gray-600">名字</label>
-              <input className="w-full border rounded p-2" value={name} onChange={e=>setName(e.target.value)} placeholder="例如：王小明" />
-            </div>
-            <div className="col-span-1">
-              <label className="text-sm text-gray-600">金額</label>
-              <input className="w-full border rounded p-2 mono" value={amount} onChange={e=>setAmount(e.target.value)} inputMode="numeric" placeholder="100/200/500/1000" />
-            </div>
-            <div className="col-span-3">
-              <button onClick={addEntry} className="px-4 py-2 rounded bg-red-600 text-white">新增記錄</button>
+              <div className="flex items-end justify-end gap-2">
+                <button onClick={resetBreakdown} className="px-3 py-2 border rounded">重設明細</button>
+                <button onClick={addEntry} className="px-4 py-2 rounded bg-red-600 text-white">新增記錄</button>
+              </div>
             </div>
           </div>
 
@@ -436,12 +433,18 @@
           <div className="space-y-2">
             {entries.length === 0 && <div className="text-sm text-gray-500">目前尚無資料</div>}
             {entries.map(e => (
-              <div key={e.id} className="p-3 border rounded-md flex items-center justify-between">
-                <div>
-                  <div className="font-medium">#{e.code} · {e.name || '（未填名）'} · ${e.amount || '—'}</div>
-                  <div className="text-xs text-gray-500">{new Date(e.dateISO).toLocaleString()}</div>
+              <div key={e.id} className="p-3 border rounded-md">
+                <div className="flex items-center justify-between">
+                  <div className="font-medium">#{e.code} · {e.name || '（未填名）'} · 總額 <span className="mono">${e.total}</span></div>
+                  <button className="text-sm text-red-600" onClick={()=>{
+                    const next = entries.filter(x => x.id !== e.id);
+                    setEntries(next); saveEntries(next);
+                  }}>刪除</button>
                 </div>
-                <button className="text-sm text-red-600" onClick={()=>removeEntry(e.id)}>刪除</button>
+                <div className="text-xs text-gray-500">{new Date(e.dateISO).toLocaleString()}</div>
+                <div className="text-xs text-gray-600 mt-1">
+                  明細：$100×{e.c100}、$200×{e.c200}、$500×{e.c500}、$1000×{e.c1000}
+                </div>
               </div>
             ))}
           </div>
