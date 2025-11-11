@@ -6,40 +6,36 @@
   <meta name="theme-color" content="#dc2626" />
   <title>紅包記帳系統</title>
 
-  <!-- 動態加載 manifest 與 apple icons -->
   <link rel="apple-touch-icon" sizes="192x192" id="apple-192" />
   <link rel="apple-touch-icon" sizes="512x512" id="apple-512" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="紅包記帳" />
 
-  <!-- React / Babel -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-  <!-- Tailwind CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
 
-  <!-- Tesseract.js for OCR -->
+  <!-- Tesseract.js CDN -->
   <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
 
   <style>
     video, canvas { max-width: 100%; border-radius: 0.5rem; }
+    .badge { padding:.1rem .5rem; border-radius:.5rem; font-size:.75rem; }
   </style>
 </head>
 <body class="bg-white text-gray-800">
   <div id="root"></div>
 
   <script type="text/babel">
-    // 工具：偵測 GitHub Pages basePath
     function detectBasePath(){
       const parts = location.pathname.split('/').filter(Boolean);
       return parts.length === 0 ? '/' : '/' + parts[0] + '/';
     }
     const basePath = detectBasePath();
 
-    // 動態掛 manifest
+    // 動態 manifest
     (function attachManifest(){
       const manifest = {
         name: "紅包記帳系統",
@@ -55,51 +51,52 @@
           { src: basePath + "icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" }
         ]
       };
-      const blob = new Blob([JSON.stringify(manifest)], {type: 'application/json'});
-      const url = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(new Blob([JSON.stringify(manifest)], {type:'application/json'}));
       const link = document.createElement('link');
-      link.rel = 'manifest';
-      link.href = url;
-      document.head.appendChild(link);
+      link.rel = 'manifest'; link.href = url; document.head.appendChild(link);
       document.getElementById('apple-192').setAttribute('href', basePath + 'icon-192.png');
       document.getElementById('apple-512').setAttribute('href', basePath + 'icon-512.png');
     })();
 
-    // 型別
-    /**
-     * Entry: { id, dateISO, name, amount, count }
-     */
-
-    // 本機儲存：localStorage（可改 IndexedDB）
+    // 狀態工具
     const STORAGE_KEY = 'giftbook-entries';
     const loadEntries = () => {
-      try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
-      catch { return []; }
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch { return []; }
     };
     const saveEntries = (arr) => localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
 
+    function useNetworkStatus(){
+      const [online, setOnline] = React.useState(navigator.onLine);
+      React.useEffect(()=>{
+        const on = ()=>setOnline(true), off=()=>setOnline(false);
+        window.addEventListener('online', on);
+        window.addEventListener('offline', off);
+        return ()=>{window.removeEventListener('online', on); window.removeEventListener('offline', off);};
+      },[]);
+      return online;
+    }
+
     function useCamera() {
       const [stream, setStream] = React.useState(null);
+      const [error, setError] = React.useState('');
       const videoRef = React.useRef(null);
       const canvasRef = React.useRef(null);
 
       const open = async () => {
+        setError('');
         try {
-          // iOS 需 HTTPS；偏好後鏡頭
           const s = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
             audio: false
           });
           setStream(s);
         } catch (e) {
-          alert('相機開啟失敗：' + e.message + '\n可改用下方「選擇照片」上傳辨識。');
+          setError(e.message);
+          alert('相機開啟失敗：' + e.message + '\n提示：請在 Safari 的網站設定允許此網站的相機存取，或改用「選擇照片」。');
         }
       };
 
-      const close = () => {
-        stream?.getTracks().forEach(t => t.stop());
-        setStream(null);
-      };
+      const close = () => { stream?.getTracks().forEach(t => t.stop()); setStream(null); };
 
       React.useEffect(() => {
         if (videoRef.current && stream) {
@@ -114,31 +111,35 @@
         const w = v.videoWidth, h = v.videoHeight;
         if (!w || !h) return null;
         c.width = w; c.height = h;
-        const ctx = c.getContext('2d');
-        ctx.drawImage(v, 0, 0, w, h);
+        c.getContext('2d').drawImage(v, 0, 0, w, h);
         return c.toDataURL('image/png');
       };
 
-      return { videoRef, canvasRef, open, close, snap, stream };
+      return { videoRef, canvasRef, open, close, snap, stream, error };
     }
 
     function parseOcrText(text) {
-      // 嘗試找金額（阿拉伯數字）；支援常見字元
       const amountMatch = text.replace(/[,，]/g,'').match(/(\d{2,7})/);
       const amount = amountMatch ? parseInt(amountMatch[1], 10) : '';
-
-      // 嘗試抽出中文姓名（連續2-4個中日韓字元，僅示意）
       const nameMatch = text.match(/[\u4e00-\u9fff]{2,4}/);
       const name = nameMatch ? nameMatch[0] : '';
-
       return { amount: isNaN(amount) ? '' : amount, name };
     }
 
+    async function warmupOCR(){
+      // 小型預熱：download worker + lang，避免首次辨識太慢或離線報錯
+      const w = await Tesseract.createWorker();
+      await w.loadLanguage('chi_tra+eng');
+      await w.initialize('chi_tra+eng');
+      await w.terminate();
+    }
+
     function App(){
+      const online = useNetworkStatus();
       const cam = useCamera();
-      const fileRef = React.useRef(null);
       const [busy, setBusy] = React.useState(false);
       const [langReady, setLangReady] = React.useState(false);
+      const [diag, setDiag] = React.useState({ sw: '未知', scope: '' });
 
       const [name, setName] = React.useState('');
       const [amount, setAmount] = React.useState('');
@@ -146,25 +147,29 @@
       const [entries, setEntries] = React.useState(loadEntries());
 
       React.useEffect(() => {
-        // Service Worker 註冊
         if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.register(basePath + 'service-worker.js', { scope: basePath });
+          navigator.serviceWorker.register(basePath + 'service-worker.js', { scope: basePath })
+            .then(reg => {
+              setDiag({ sw: '已註冊', scope: reg.scope });
+            })
+            .catch(err => setDiag({ sw: '註冊失敗：' + err.message, scope: '' }));
+        } else {
+          setDiag({ sw: '不支援', scope: '' });
         }
       }, []);
 
-      // 載入 Tesseract 語言資料（繁中+英）
       const ensureLang = async () => {
         if (langReady) return;
+        if (!online) {
+          alert('首次使用 OCR 需要網路下載語言資料，請先連線再試。');
+          return;
+        }
         setBusy(true);
         try {
-          const worker = await Tesseract.createWorker();
-          await worker.loadLanguage('chi_tra+eng');
-          await worker.initialize('chi_tra+eng');
-          await worker.terminate(); // 僅為預熱
+          await warmupOCR();
           setLangReady(true);
         } catch (e) {
-          console.error(e);
-          alert('OCR 語言下載失敗，請稍後再試或檢查網路。');
+          alert('下載 OCR 語言資料失敗：' + e.message);
         } finally {
           setBusy(false);
         }
@@ -173,17 +178,16 @@
       const runOCR = async (dataUrl) => {
         setBusy(true);
         try {
-          const worker = await Tesseract.createWorker();
-          await worker.loadLanguage('chi_tra+eng');
-          await worker.initialize('chi_tra+eng');
-          const { data: { text } } = await worker.recognize(dataUrl);
-          await worker.terminate();
+          const w = await Tesseract.createWorker();
+          await w.loadLanguage('chi_tra+eng');
+          await w.initialize('chi_tra+eng');
+          const { data: { text } } = await w.recognize(dataUrl);
+          await w.terminate();
           const parsed = parseOcrText(text || '');
           if (parsed.name) setName(parsed.name);
           if (parsed.amount) setAmount(parsed.amount);
         } catch (e) {
-          console.error(e);
-          alert('辨識失敗：' + e.message);
+          alert('辨識失敗：' + e.message + '\n提示：請確認目前有網路（首次需要下載語言包），或改用「選擇照片」。');
         } finally {
           setBusy(false);
         }
@@ -191,38 +195,26 @@
 
       const onSnapAndRecognize = async () => {
         await ensureLang();
+        if (!langReady) return;
         const dataUrl = cam.snap();
-        if (!dataUrl) {
-          alert('相機尚未就緒，請稍候或改用上傳照片。');
-          return;
-        }
+        if (!dataUrl) { alert('相機尚未就緒，或暫無影像。'); return; }
         await runOCR(dataUrl);
       };
 
       const onPickFile = async (ev) => {
         await ensureLang();
+        if (!langReady) return;
         const file = ev.target.files?.[0];
         if (!file) return;
         const reader = new FileReader();
-        reader.onload = async () => {
-          await runOCR(reader.result);
-        };
+        reader.onload = async () => { await runOCR(reader.result); };
         reader.readAsDataURL(file);
       };
 
       const addEntry = () => {
-        if (!name && !amount) {
-          alert('請先輸入或辨識出「名字」或「金額」。');
-          return;
-        }
+        if (!name && !amount) { alert('請先輸入或辨識出「名字」或「金額」。'); return; }
         const now = new Date();
-        const entry = {
-          id: now.getTime(),
-          dateISO: now.toISOString(),
-          name: name || '',
-          amount: amount ? Number(amount) : '',
-          count: Number(count) || 1
-        };
+        const entry = { id: now.getTime(), dateISO: now.toISOString(), name, amount: amount?Number(amount):'', count: Number(count)||1 };
         const next = [entry, ...entries];
         setEntries(next);
         saveEntries(next);
@@ -237,29 +229,38 @@
 
       const exportCSV = () => {
         const header = ['日期','名字','金額','數量'];
-        const rows = entries.map(e => {
-          const date = new Date(e.dateISO).toLocaleString();
-          return [date, e.name, e.amount, e.count];
-        });
+        const rows = entries.map(e => [new Date(e.dateISO).toLocaleString(), e.name, e.amount, e.count]);
         const csv = [header, ...rows].map(r => r.map(x => `"${(x??'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
-        const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'giftbook.csv';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        const url = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8;'}));
+        const a = Object.assign(document.createElement('a'), { href:url, download:'giftbook.csv' });
+        document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
       };
 
       return (
         <div className="max-w-xl mx-auto p-4 space-y-4">
-          <h1 className="text-2xl font-bold text-red-600">紅包記帳系統</h1>
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl font-bold text-red-600">紅包記帳系統</h1>
+            <div className="flex items-center gap-2">
+              <span className={"badge " + (online ? "bg-green-100 text-green-700":"bg-gray-200 text-gray-600")}>
+                {online ? "線上" : "離線"}
+              </span>
+              <span className="badge bg-gray-100 text-gray-700">SW: {diag.sw}</span>
+            </div>
+          </div>
+
+          <details className="p-3 border rounded-md">
+            <summary className="cursor-pointer">診斷資料（展開查看）</summary>
+            <div className="text-sm text-gray-600 mt-2">
+              BasePath：<code>{basePath}</code><br/>
+              SW Scope：<code>{diag.scope || '（無）'}</code><br/>
+              Camera Error：<code>{cam.error || '（無）'}</code><br/>
+              OCR 語言是否已載入：<code>{String(langReady)}</code>
+            </div>
+          </details>
 
           <div className="space-y-2 p-3 border rounded-lg">
             <div className="font-semibold">相機辨識</div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               {!cam.stream
                 ? <button onClick={cam.open} className="px-3 py-2 rounded bg-red-600 text-white">開啟相機</button>
                 : <button onClick={cam.close} className="px-3 py-2 rounded border">關閉相機</button>
@@ -267,24 +268,24 @@
               <button onClick={onSnapAndRecognize} className="px-3 py-2 rounded border">拍照並辨識</button>
               <label className="px-3 py-2 rounded border cursor-pointer">
                 選擇照片
-                <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={onPickFile} />
+                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={onPickFile} />
               </label>
             </div>
             <video ref={cam.videoRef} playsInline muted className="w-full bg-black/5"></video>
             <canvas ref={cam.canvasRef} className="hidden"></canvas>
-            {busy && <div className="text-sm text-gray-500">載入/辨識中，首次會下載語言資料（需網路）...</div>}
+            {busy && <div className="text-sm text-gray-500">載入/辨識中（首次需要網路下載 OCR 語言檔）...</div>}
           </div>
 
           <div className="grid grid-cols-3 gap-3">
-            <div className="col-span-1">
+            <div>
               <label className="text-sm text-gray-600">名字</label>
               <input className="w-full border rounded p-2" value={name} onChange={e=>setName(e.target.value)} placeholder="例如：王小明" />
             </div>
-            <div className="col-span-1">
+            <div>
               <label className="text-sm text-gray-600">金額</label>
               <input className="w-full border rounded p-2" value={amount} onChange={e=>setAmount(e.target.value)} inputMode="numeric" placeholder="例如：3600" />
             </div>
-            <div className="col-span-1">
+            <div>
               <label className="text-sm text-gray-600">數量</label>
               <input className="w-full border rounded p-2" value={count} onChange={e=>setCount(e.target.value)} inputMode="numeric" placeholder="1" />
             </div>
