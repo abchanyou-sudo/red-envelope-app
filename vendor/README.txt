@@ -1,0 +1,1 @@
+tesseract.min.js、tesseract.worker.min.js、tesseract-core.wasm
