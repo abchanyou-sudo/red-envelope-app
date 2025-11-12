@@ -1,0 +1,1 @@
+請把 chi_tra.traineddata（可選 eng.traineddata）放在此資料夾。
