@@ -7,11 +7,17 @@
   <style>
     body { font-family: -apple-system, system-ui, sans-serif; padding: 2rem; }
     .btn { display:inline-block; padding:.6rem 1rem; border-radius:.5rem; border:1px solid #ddd; text-decoration:none; }
+    code { background:#f3f4f6; padding:.15rem .35rem; border-radius:.25rem; }
   </style>
 </head>
 <body>
   <h1>目前處於離線狀態</h1>
-  <p>首次執行 OCR 需要網路下載語言檔；連線後回到首頁再試一次。</p>
+  <p>若首次載入失敗，請連線後再次開啟，以讓 PWA 完成安裝快取。</p>
+  <h2>離線模型部署提示</h2>
+  <ol>
+    <li>將 <code>tesseract.min.js</code>、<code>tesseract.worker.min.js</code>、<code>tesseract-core.wasm</code> 放入 <code>/vendor/</code></li>
+    <li>將 <code>chi_tra.traineddata</code>（可選 <code>eng.traineddata</code>）放入 <code>/models/</code></li>
+  </ol>
   <a class="btn" href="./">回首頁</a>
 </body>
 </html>

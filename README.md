@@ -1,20 +1,23 @@
-# 紅包記帳系統（單次多張紙鈔辨識版 v2.2.0）
+# 紅包記帳系統（離線模型就緒版 v2.4.0）
 
-**一張照片就同時偵測多張紙鈔**：自動蒐集 100/200/500/1000 的出現次數並加總，避免出現 71、序號等誤判。
+> 這個版本「不依賴 CDN」，把 Tesseract 的 worker/core/語言檔放在本機即可。部署到 GitHub Pages 後，第一次打開即能離線運作。
 
-- GitHub Pages 自動 basePath
-- 相簿選擇 + 拍照 +（可選）相機串流截圖辨識
-- 編碼：每新增自動 +1，可手動修改或「重設為 1」
-- 列表顯示總額與明細（100×a、200×b、…）
-- CSV 匯出含總額、總張數與各面額數量
-- 首次上線下載 OCR 語言；SW 具 CDN runtime cache、PWA 離線可用
+## 你只要做兩件事
+1. 放進 **/vendor**：`tesseract.min.js`、`tesseract.worker.min.js`、`tesseract-core.wasm`
+2. 放進 **/models**：`chi_tra.traineddata`（可選 `eng.traineddata`）
 
-## 部署
-1. 建立（或使用既有）GitHub Repo。
-2. 上傳本包所有檔案到根目錄並 Commit。
-3. Settings → Pages：Source 選 Deploy from a branch；Branch 選 main、資料夾 /(root)。
-4. 開啟 `https://你的帳號.github.io/<repo>/`；iPhone 用 Safari 可加入主畫面。
+PWA 的 Service Worker 對 `/vendor` 與 `/models` 走 **cache-first**，確保不會重複下載。
 
-## 使用建議
-- 讓紙鈔佔畫面 60%+、光線均勻、避免反光。
-- 抓不到時可用按鈕手動 +/− 調整各面額張數後再新增記錄。
+## 功能
+- 單次多張紙鈔：擷取 100/200/500/1000（含中文大寫）全部出現次數並加總。
+- 編碼自動 +1，CSV 匯出（檔名含日期）。
+- 清楚的「模型/worker 來源」診斷面板（本地/或暫用 CDN）。
+- GitHub Pages basePath 自動偵測；PWA 離線快取。
+
+## 完全離線（可選）
+目前 Tailwind 仍走 CDN。若要 100% 離線，請把 `tailwind.css` 放進 `/vendor/` 並改 `index.html` 為本地引用。
+
+## GitHub Pages 部署
+1. 上傳整個資料夾內容（含 /vendor 與 /models）到 repo 根目錄。
+2. Settings → Pages：Deploy from a branch → main → /(root)。
+3. 手機 Safari 開啟 `https://<帳號>.github.io/<repo>/` → 加入主畫面。

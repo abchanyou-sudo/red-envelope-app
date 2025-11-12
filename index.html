@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#dc2626" />
-  <title>紅包記帳系統</title>
+  <title>紅包記帳系統（離線模型版）</title>
 
   <link rel="apple-touch-icon" sizes="192x192" id="apple-192" />
   <link rel="apple-touch-icon" sizes="512x512" id="apple-512" />
@@ -12,38 +12,100 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="紅包記帳" />
 
-  <!-- React / Babel -->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- 本地版：從 /vendor 載入 tesseract.js 與 worker -->
+  <script src="./vendor/tesseract.min.js"></script>
 
-  <!-- Tailwind CDN -->
+  <!-- Tailwind CDN（可移除，若要完全離線請也改為本地） -->
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Tesseract.js -->
-  <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
 
   <style>
     video, canvas { max-width: 100%; border-radius: 0.5rem; }
     .badge { padding:.1rem .5rem; border-radius:.5rem; font-size:.75rem; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
     .chip { display:inline-block; padding:.2rem .5rem; border:1px solid #eee; border-radius:.5rem; margin-right:.4rem; margin-bottom:.3rem; }
+    .warn { color:#b45309; }
   </style>
 </head>
 <body class="bg-white text-gray-800">
-  <div id="root"></div>
+  <div id="app" class="max-w-xl mx-auto p-4 space-y-4">
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold text-red-600">紅包記帳系統（離線模型）</h1>
+      <div class="flex items-center gap-2">
+        <span id="net" class="badge bg-gray-200 text-gray-600">檢查中</span>
+        <span id="seq" class="badge bg-gray-100 text-gray-700">編碼：1</span>
+      </div>
+    </div>
 
-  <script type="text/babel">
+    <details class="p-3 border rounded-md" open>
+      <summary class="cursor-pointer">離線模型狀態（展開）</summary>
+      <div class="text-sm mt-2 space-y-2" id="diag">
+        <div>Worker 來源：<code id="wsrc">尚未載入</code></div>
+        <div>語言檔：<code id="langs">尚未載入</code></div>
+        <div class="warn">
+          若顯示「尚未載入」，代表你尚未把檔案放進：<br/>
+          1) <b>/vendor/</b>：<code>tesseract.min.js</code>、<code>tesseract.worker.min.js</code>、<code>tesseract-core.wasm</code><br/>
+          2) <b>/models/</b>：<code>chi_tra.traineddata</code>（可選 <code>eng.traineddata</code>）<br/>
+        </div>
+        <label class="inline-flex items-center gap-2">
+          <input type="checkbox" id="allowCdn" />
+          <span>檔案缺失時，允許暫時使用 CDN 後援（僅測試用）</span>
+        </label>
+      </div>
+    </details>
+
+    <div class="p-3 border rounded-lg space-y-2">
+      <div class="font-semibold">相片/相機（一次多張紙鈔）</div>
+      <div class="flex gap-2 flex-wrap">
+        <label class="px-3 py-2 rounded border cursor-pointer">
+          拍照
+          <input id="pickCam" type="file" accept="image/*" capture="environment" class="hidden" />
+        </label>
+        <label class="px-3 py-2 rounded border cursor-pointer">
+          從相簿選擇
+          <input id="pickLib" type="file" accept="image/*" class="hidden" />
+        </label>
+        <button id="openCam" class="px-3 py-2 rounded bg-red-600 text-white">開啟相機</button>
+        <button id="closeCam" class="px-3 py-2 rounded border hidden">關閉相機</button>
+        <button id="snap" class="px-3 py-2 rounded border">拍照（串流）並辨識</button>
+      </div>
+      <video id="video" playsInline muted class="w-full bg-black/5"></video>
+      <canvas id="canvas" class="hidden"></canvas>
+      <div id="busy" class="text-sm text-gray-500 hidden">載入/辨識中...</div>
+    </div>
+
+    <div class="p-3 border rounded-lg space-y-3">
+      <div class="font-semibold">辨識結果（可手動調整）</div>
+      <div id="chips" class="flex flex-wrap gap-2"></div>
+      <div class="text-sm text-gray-600">共 <b id="cnt">0</b> 張；總金額 <b id="sum" class="mono">$0</b></div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-sm text-gray-600">名字（可選）</label>
+          <input id="name" class="w-full border rounded p-2" placeholder="例如：王小明" />
+        </div>
+        <div class="flex items-end justify-end gap-2">
+          <button id="reset" class="px-3 py-2 border rounded">重設明細</button>
+          <button id="add" class="px-4 py-2 rounded bg-red-600 text-white">新增記錄</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex justify-between items-center">
+      <div class="font-semibold">記錄列表（儲存在本機）</div>
+      <button id="export" class="px-3 py-2 rounded border">匯出 CSV</button>
+    </div>
+    <div id="list" class="space-y-2"></div>
+  </div>
+
+  <script>
     // ---------- BasePath & Manifest ----------
     function detectBasePath(){
       const parts = location.pathname.split('/').filter(Boolean);
       return parts.length === 0 ? '/' : '/' + parts[0] + '/';
     }
     const basePath = detectBasePath();
-
     (function attachManifest(){
       const manifest = {
-        name: "紅包記帳系統",
+        name: "紅包記帳系統（離線模型）",
         short_name: "紅包記帳",
         start_url: basePath,
         scope: basePath,
@@ -57,403 +119,236 @@
         ]
       };
       const url = URL.createObjectURL(new Blob([JSON.stringify(manifest)], {type:'application/json'}));
-      const link = document.createElement('link');
-      link.rel = 'manifest'; link.href = url; document.head.appendChild(link);
+      const link = document.createElement('link'); link.rel = 'manifest'; link.href = url; document.head.appendChild(link);
       document.getElementById('apple-192').setAttribute('href', basePath + 'icon-192.png');
       document.getElementById('apple-512').setAttribute('href', basePath + 'icon-512.png');
     })();
 
-    // ---------- Storage Keys ----------
+    // ---------- Storage ----------
     const STORAGE_ENTRIES = 'giftbook-entries';
     const STORAGE_SEQ = 'giftbook-seq';
-
-    const loadEntries = () => {
-      try { return JSON.parse(localStorage.getItem(STORAGE_ENTRIES) || '[]'); }
-      catch { return []; }
-    };
+    const loadEntries = () => { try { return JSON.parse(localStorage.getItem(STORAGE_ENTRIES) || '[]'); } catch { return []; } };
     const saveEntries = (arr) => localStorage.setItem(STORAGE_ENTRIES, JSON.stringify(arr));
-    const loadSeq = () => {
-      const n = parseInt(localStorage.getItem(STORAGE_SEQ) || '1', 10);
-      return isNaN(n) ? 1 : n;
-    };
+    const loadSeq = () => { const n = parseInt(localStorage.getItem(STORAGE_SEQ) || '1', 10); return isNaN(n) ? 1 : n; };
     const saveSeq = (n) => localStorage.setItem(STORAGE_SEQ, String(n));
 
-    // ---------- Helpers ----------
-    function useNetworkStatus(){
-      const [online, setOnline] = React.useState(navigator.onLine);
-      React.useEffect(()=>{
-        const on = ()=>setOnline(true), off=()=>setOnline(false);
-        window.addEventListener('online', on);
-        window.addEventListener('offline', off);
-        return ()=>{window.removeEventListener('online', on); window.removeEventListener('offline', off);};
-      },[]);
-      return online;
+    // ---------- UI refs ----------
+    const net = document.getElementById('net');
+    const seqBadge = document.getElementById('seq');
+    const busyEl = document.getElementById('busy');
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const pickCam = document.getElementById('pickCam');
+    const pickLib = document.getElementById('pickLib');
+    const openCam = document.getElementById('openCam');
+    const closeCam = document.getElementById('closeCam');
+    const snapBtn = document.getElementById('snap');
+    const chips = document.getElementById('chips');
+    const nameEl = document.getElementById('name');
+    const cntEl = document.getElementById('cnt');
+    const sumEl = document.getElementById('sum');
+    const resetBtn = document.getElementById('reset');
+    const addBtn = document.getElementById('add');
+    const exportBtn = document.getElementById('export');
+    const listEl = document.getElementById('list');
+    const wsrcEl = document.getElementById('wsrc');
+    const langsEl = document.getElementById('langs');
+    const allowCdn = document.getElementById('allowCdn');
+
+    window.addEventListener('online', ()=> net.textContent='線上' );
+    window.addEventListener('offline', ()=> net.textContent='離線' );
+    net.textContent = navigator.onLine ? '線上' : '離線';
+
+    let seq = loadSeq(); seqBadge.textContent = '編碼：' + seq;
+    let entries = loadEntries();
+
+    // ---------- Breakdown state ----------
+    const ALLOWED = [100,200,500,1000];
+    const CN_MAP = { "壹佰":100, "貳佰":200, "伍佰":500, "壹仟":1000, "壹百":100, "貳百":200, "伍百":500, "壹千":1000 };
+    let breakdown = {100:0,200:0,500:0,1000:0};
+    function renderChips(){
+      chips.innerHTML = '';
+      for (const v of ALLOWED){
+        const wrap = document.createElement('div');
+        wrap.className = 'chip';
+        wrap.innerHTML = '<span class="mono">$'+v+'</span> ' +
+          '<button class="ml-2 px-2 border rounded">-</button> ' +
+          '<span class="mx-2">'+breakdown[v]+'</span> ' +
+          '<button class="px-2 border rounded">+</button>';
+        const [minus, , countEl, plus] = wrap.querySelectorAll('button,span');
+        minus.addEventListener('click', ()=>{ breakdown[v] = Math.max(0, breakdown[v]-1); countEl.textContent = breakdown[v]; updateSum(); });
+        plus.addEventListener('click', ()=>{ breakdown[v] += 1; countEl.textContent = breakdown[v]; updateSum(); });
+        chips.appendChild(wrap);
+      }
     }
-
-    function useCamera() {
-      const [stream, setStream] = React.useState(null);
-      const [error, setError] = React.useState('');
-      const videoRef = React.useRef(null);
-      const canvasRef = React.useRef(null);
-
-      const open = async () => {
-        setError('');
-        try {
-          const s = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-            audio: false
-          });
-          setStream(s);
-        } catch (e) {
-          setError(e.message);
-          alert('相機開啟失敗：' + e.message + '\\n提示：請在 Safari 的網站設定允許此網站的相機存取，或改用「從相簿選擇」。');
-        }
-      };
-
-      const close = () => { stream?.getTracks().forEach(t => t.stop()); setStream(null); };
-
-      React.useEffect(() => {
-        if (videoRef.current && stream) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.play().catch(()=>{});
-        }
-      }, [stream]);
-
-      const snap = () => {
-        const v = videoRef.current, c = canvasRef.current;
-        if (!v || !c) return null;
-        const w = v.videoWidth, h = v.videoHeight;
-        if (!w || !h) return null;
-        c.width = w; c.height = h;
-        c.getContext('2d').drawImage(v, 0, 0, w, h);
-        return c.toDataURL('image/png');
-      };
-
-      return { videoRef, canvasRef, open, close, snap, stream, error };
+    function updateSum(){
+      const total = breakdown[100]*100 + breakdown[200]*200 + breakdown[500]*500 + breakdown[1000]*1000;
+      const count = breakdown[100] + breakdown[200] + breakdown[500] + breakdown[1000];
+      cntEl.textContent = count; sumEl.textContent = '$' + total;
     }
+    function resetBreakdown(){ breakdown = {100:0,200:0,500:0,1000:0}; renderChips(); updateSum(); }
+    renderChips(); updateSum();
 
-    // ---------- OCR Utilities ----------
-    const ALLOWED = [100, 200, 500, 1000]; // allowed denominations
-    const ALLOWED_SET = new Set(ALLOWED);
+    // ---------- Camera helpers ----------
+    let stream = null;
+    async function openCamera(){
+      try{
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio:false });
+        video.srcObject = stream; await video.play(); openCam.classList.add('hidden'); closeCam.classList.remove('hidden');
+      }catch(e){ alert('相機開啟失敗：' + e.message); }
+    }
+    function closeCamera(){ stream?.getTracks().forEach(t=>t.stop()); video.srcObject=null; openCam.classList.remove('hidden'); closeCam.classList.add('hidden'); }
+    function snap(){
+      if(!video.videoWidth) return null;
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video,0,0,canvas.width,canvas.height);
+      return canvas.toDataURL('image/png');
+    }
+    openCam.addEventListener('click', openCamera);
+    closeCam.addEventListener('click', closeCamera);
+    snapBtn.addEventListener('click', async ()=>{
+      const dataUrl = snap();
+      if(!dataUrl) return alert('相機未就緒');
+      await run(dataUrl);
+    });
+    pickCam.addEventListener('change', async (e)=>{
+      const f = e.target.files?.[0]; if(!f) return;
+      const r = new FileReader(); r.onload = async ()=>{ await run(r.result); }; r.readAsDataURL(f); e.target.value='';
+    });
+    pickLib.addEventListener('change', async (e)=>{
+      const f = e.target.files?.[0]; if(!f) return;
+      const r = new FileReader(); r.onload = async ()=>{ await run(r.result); }; r.readAsDataURL(f); e.target.value='';
+    });
 
-    const CN_MAP = {
-      "壹佰": 100, "貳佰": 200, "伍佰": 500, "壹仟": 1000,
-      "壹百": 100, "貳百": 200, "伍百": 500, "壹千": 1000
-    };
+    // ---------- Local Tesseract loading (from /vendor + /models) ----------
+    let worker = null;
+    async function ensureWorker(){
+      if (worker) return worker;
+      async function exists(url){ try { const r = await fetch(url, { method:'HEAD' }); return r.ok; } catch { return false; } }
+      const workerUrlLocal = basePath + 'vendor/tesseract.worker.min.js';
+      const coreUrlLocal   = basePath + 'vendor/tesseract-core.wasm';
+      const chiLocal       = basePath + 'models/chi_tra.traineddata';
 
-    // Estimate dominant color bucket for fallback
-    async function estimateDominantHue(dataUrl){
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      const p = new Promise((resolve, reject) => {
-        img.onload = () => {
-          const cv = document.createElement('canvas');
-          const ctx = cv.getContext('2d');
-          const W = 200, H = Math.round(img.height * (200 / img.width));
-          cv.width = W; cv.height = H;
-          ctx.drawImage(img, 0, 0, W, H);
-          const { data } = ctx.getImageData(0, 0, W, H);
-          let reds=0, greens=0, blues=0, browns=0;
-          for (let i=0;i<data.length;i+=16){
-            const r=data[i]/255, g=data[i+1]/255, b=data[i+2]/255;
-            const max=Math.max(r,g,b), min=Math.min(r,g,b);
-            const v=max, s=max===0?0:(max-min)/max;
-            if (s<0.2||v<0.2) continue;
-            let h=0;
-            if (max!==min){
-              const d=max-min;
-              if (max===r) h=(g-b)/d+(g<b?6:0);
-              else if (max===g) h=(b-r)/d+2;
-              else h=(r-g)/d+4;
-              h*=60;
-            }
-            if (h<=20||h>=340) reds++;
-            else if (h>=80&&h<=160) greens++;
-            else if (h>=190&&h<=250) blues++;
-            else if (h>=20&&h<=50) browns++;
-          }
-          let bucket='other', m=Math.max(reds,greens,blues,browns);
-          if (m===reds) bucket='red';
-          else if (m===greens) bucket='green';
-          else if (m===blues) bucket='blue';
-          else if (m===browns) bucket='brown';
-          resolve({ bucket });
-        };
-        img.onerror = reject;
+      const hasWorker = await exists(workerUrlLocal);
+      const hasCore   = await exists(coreUrlLocal);
+      const hasChi    = await exists(chiLocal);
+
+      let workerUrl = workerUrlLocal;
+      let corePath  = coreUrlLocal;
+      let langPath  = basePath + 'models';
+      let usedCdn = false;
+
+      if (!(hasWorker && hasCore && hasChi)) {
+        const allow = document.getElementById('allowCdn').checked;
+        if (!allow) throw new Error('找不到本地 worker/core/語言檔，且未允許 CDN 後援');
+        usedCdn = true;
+        workerUrl = 'https://unpkg.com/tesseract.js@v5.0.5/dist/worker.min.js';
+        corePath  = 'https://unpkg.com/tesseract.js-core@v5.0.0/tesseract-core.wasm';
+        langPath  = 'https://tessdata.projectnaptha.com/5';
+      }
+
+      wsrcEl.textContent = usedCdn ? ('CDN: ' + workerUrl) : ('本地: ' + workerUrlLocal);
+
+      worker = Tesseract.createWorker({
+        workerPath: workerUrl,
+        corePath: corePath,
+        langPath: langPath,
+        gzip: false,
       });
-      img.src = dataUrl;
-      return p;
+      await worker.load();
+      await worker.loadLanguage('chi_tra');
+      await worker.initialize('chi_tra');
+      langsEl.textContent = usedCdn ? 'chi_tra（CDN）' : 'chi_tra（本地）';
+      return worker;
     }
 
-    function guessByColor(bucket){
-      if (bucket==='red') return 100;
-      if (bucket==='green') return 200;
-      if (bucket==='brown') return 500;
-      if (bucket==='blue') return 1000;
-      return null;
-    }
-
-    // Extract ALL allowed denominations from OCR text (Arabic + Chinese)
-    function extractAllDenoms(text){
-      const found = [];
-      // Chinese uppercase
+    function extractAll(text){
+      const found=[];
       for (const [k,v] of Object.entries(CN_MAP)){
-        const re = new RegExp(k, 'g');
-        const matches = text.match(re);
-        if (matches) for (let i=0;i<matches.length;i++) found.push(v);
+        const re=new RegExp(k,'g'); const m=text.match(re); if(m) for(let i=0;i<m.length;i++) found.push(v);
       }
-      // Normalized Arabic digits
-      let cleaned = text.replace(/[,\s]/g,'')
-                        .replace(/NTD|TWD|NT|\$|元|圓|塊|元整/g,'')
-                        .replace(/[Oo]/g,'0')
-                        .replace(/[Il]/g,'1');
-      const m = cleaned.match(/\d{3,4}/g) || [];
-      for (const t of m){
-        const n = parseInt(t,10);
-        if (ALLOWED_SET.has(n)) found.push(n);
-      }
+      let cleaned = text.replace(/[,\s]/g,'').replace(/NTD|TWD|NT|\$|元|圓|塊|元整/g,'').replace(/[Oo]/g,'0').replace(/[Il]/g,'1');
+      const m2 = cleaned.match(/\d{3,4}/g) || [];
+      for(const t of m2){ const n=parseInt(t,10); if(ALLOWED.includes(n)) found.push(n); }
       return found;
     }
 
-    async function warmupOCR(){
-      const w = await Tesseract.createWorker();
-      await w.loadLanguage('chi_tra+eng');
-      await w.initialize('chi_tra+eng');
-      await w.terminate();
-    }
+    function busy(v){ busyEl.classList.toggle('hidden', !v); }
 
-    // ---------- App ----------
-    function App(){
-      const online = useNetworkStatus();
-      const cam = useCamera();
-      const [busy, setBusy] = React.useState(false);
-      const [langReady, setLangReady] = React.useState(false);
+    async function run(dataUrl){
+      busy(true);
+      try {
+        const w = await ensureWorker();
+        await w.setParameters({ tessedit_char_whitelist:'0123456789', tessedit_pageseg_mode:'6' });
+        const r1 = await w.recognize(dataUrl);
+        await w.setParameters({ tessedit_char_whitelist:'', tessedit_pageseg_mode:'6' });
+        const r2 = await w.recognize(dataUrl);
+        const text = (r1.data.text||'') + '\n' + (r2.data.text||'');
 
-      const [name, setName] = React.useState('');
-      const [code, setCode] = React.useState(loadSeq());
-      const [entries, setEntries] = React.useState(loadEntries());
-
-      // multi-bill state
-      const [breakdown, setBreakdown] = React.useState({100:0, 200:0, 500:0, 1000:0});
-      const total = breakdown[100]*100 + breakdown[200]*200 + breakdown[500]*500 + breakdown[1000]*1000;
-      const totalCount = breakdown[100] + breakdown[200] + breakdown[500] + breakdown[1000];
-
-      React.useEffect(() => {
-        if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.register(basePath + 'service-worker.js', { scope: basePath });
-        }
-      }, []);
-
-      const ensureLang = async () => {
-        if (langReady) return;
-        if (!online) { alert('首次使用 OCR 需要網路下載語言資料，請先連線再試。'); return; }
-        setBusy(true);
-        try { await warmupOCR(); setLangReady(true); }
-        catch (e) { alert('下載 OCR 語言資料失敗：' + e.message); }
-        finally { setBusy(false); }
-      };
-
-      const applyFound = (list, colorBucket=null) => {
-        const next = {100:0,200:0,500:0,1000:0};
-        for (const v of list) next[v]++;
-        // 若完全沒抓到，嘗試用顏色猜 1 張
-        if (list.length===0 && colorBucket){
-          const guess = guessByColor(colorBucket);
-          if (guess) next[guess] = 1;
-        }
-        setBreakdown(next);
-      };
-
-      const runOCR = async (dataUrl) => {
-        setBusy(true);
-        try {
-          const w = await Tesseract.createWorker();
-          await w.loadLanguage('chi_tra+eng');
-          await w.initialize('chi_tra+eng');
-
-          // Two-pass: digits-first then general
-          await w.setParameters({ tessedit_char_whitelist:'0123456789', tessedit_pageseg_mode:'6' });
-          const r1 = await w.recognize(dataUrl);
-          const digitsText = r1.data.text || '';
-
-          await w.setParameters({ tessedit_char_whitelist:'', tessedit_pageseg_mode:'6' });
-          const r2 = await w.recognize(dataUrl);
-          const fullText = (r1.data.text||'') + '\n' + (r2.data.text||'');
-          await w.terminate();
-
-          // name (optional)
-          const nm = (fullText.match(/[\u4e00-\u9fff]{2,4}/) || [null])[0];
-          if (nm) setName(nm);
-
-          // extract ALL denominations
-          const list = extractAllDenoms(digitsText + '\n' + fullText);
-
-          // color fallback
-          let bucket = null;
-          if (list.length === 0) {
-            try { const res = await estimateDominantHue(dataUrl); bucket = res.bucket; } catch {}
-          }
-          applyFound(list, bucket);
-        } catch (e) {
-          alert('辨識失敗：' + e.message);
-        } finally {
-          setBusy(false);
-        }
-      };
-
-      // File inputs
-      const onPickFromCamera = async (ev) => {
-        await ensureLang(); if (!langReady) return;
-        const file = ev.target.files?.[0]; if (!file) return;
-        const reader = new FileReader();
-        reader.onload = async () => { await runOCR(reader.result); };
-        reader.readAsDataURL(file);
-        ev.target.value = "";
-      };
-      const onPickFromLibrary = async (ev) => {
-        await ensureLang(); if (!langReady) return;
-        const file = ev.target.files?.[0]; if (!file) return;
-        const reader = new FileReader();
-        reader.onload = async () => { await runOCR(reader.result); };
-        reader.readAsDataURL(file);
-        ev.target.value = "";
-      };
-      const onSnapAndRecognize = async () => {
-        await ensureLang(); if (!langReady) return;
-        const dataUrl = cam.snap();
-        if (!dataUrl) { alert('相機尚未就緒，或暫無影像。'); return; }
-        await runOCR(dataUrl);
-      };
-
-      const resetBreakdown = () => setBreakdown({100:0,200:0,500:0,1000:0});
-
-      const addEntry = () => {
-        if (total === 0) { alert('尚未辨識到任何面額，請先辨識或手動編修明細。'); return; }
-        const now = new Date();
-        const entry = {
-          id: now.getTime(),
-          dateISO: now.toISOString(),
-          code,
-          name,
-          total,
-          c100: breakdown[100], c200: breakdown[200], c500: breakdown[500], c1000: breakdown[1000],
-        };
-        const next = [entry, ...entries];
-        setEntries(next); saveEntries(next);
-
-        // 編碼 +1、清空一次性狀態
-        const nextCode = (Number(code) || 0) + 1;
-        setCode(nextCode); saveSeq(nextCode);
-        setName('');
+        const all = extractAll(text);
         resetBreakdown();
-      };
-
-      // CSV export
-      const exportCSV = () => {
-        const header = ['日期','編碼','名字','總張數','總金額','100張','200張','500張','1000張'];
-        const rows = entries.map(e => [
-          new Date(e.dateISO).toLocaleString(),
-          e.code, e.name || '', (e.c100+e.c200+e.c500+e.c1000),
-          e.total, e.c100, e.c200, e.c500, e.c1000
-        ]);
-        const csv = [header, ...rows].map(r => r.map(x => `"${(x??'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
-        const url = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8;'}));
-        const a = Object.assign(document.createElement('a'), { href:url, download:'giftbook.csv' });
-        document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-      };
-
-      // Manual adjust UI piece
-      const adjust = (d, delta) => {
-        setBreakdown(b => ({ ...b, [d]: Math.max(0, (b[d]||0) + delta) }));
-      };
-
-      return (
-        <div className="max-w-xl mx-auto p-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <h1 className="text-2xl font-bold text-red-600">紅包記帳系統</h1>
-            <div className="flex items-center gap-2">
-              <span className={"badge " + (online ? "bg-green-100 text-green-700":"bg-gray-200 text-gray-600")}>
-                {online ? "線上" : "離線"}
-              </span>
-              <span className="badge bg-gray-100 text-gray-700">編碼：{code}</span>
-            </div>
-          </div>
-
-          <div className="p-3 border rounded-lg space-y-2">
-            <div className="font-semibold">相片/相機（一次多張紙鈔）</div>
-            <div className="flex gap-2 flex-wrap">
-              <label className="px-3 py-2 rounded border cursor-pointer">
-                拍照
-                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={onPickFromCamera} />
-              </label>
-              <label className="px-3 py-2 rounded border cursor-pointer">
-                從相簿選擇
-                <input type="file" accept="image/*" className="hidden" onChange={onPickFromLibrary} />
-              </label>
-              {!cam.stream
-                ? <button onClick={cam.open} className="px-3 py-2 rounded bg-red-600 text-white">開啟相機</button>
-                : <button onClick={cam.close} className="px-3 py-2 rounded border">關閉相機</button>
-              }
-              <button onClick={onSnapAndRecognize} className="px-3 py-2 rounded border">拍照（串流）並辨識</button>
-            </div>
-            <video ref={cam.videoRef} playsInline muted className="w-full bg-black/5"></video>
-            <canvas ref={cam.canvasRef} className="hidden"></canvas>
-            {busy && <div className="text-sm text-gray-500">載入/辨識中（首次需要網路下載 OCR 語言檔）...</div>}
-          </div>
-
-          <div className="p-3 border rounded-lg space-y-3">
-            <div className="font-semibold">辨識結果（可手動調整）</div>
-            <div className="flex flex-wrap gap-2">
-              {ALLOWED.map(v => (
-                <div key={v} className="chip">
-                  <span className="mono">${v}</span>
-                  <button className="ml-2 px-2 border rounded" onClick={()=>adjust(v, -1)}>-</button>
-                  <span className="mx-2">{breakdown[v]}</span>
-                  <button className="px-2 border rounded" onClick={()=>adjust(v, +1)}>+</button>
-                </div>
-              ))}
-            </div>
-            <div className="text-sm text-gray-600">共 <b>{totalCount}</b> 張；總金額 <b className="mono">${total}</b></div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-sm text-gray-600">名字（可選）</label>
-                <input className="w-full border rounded p-2" value={name} onChange={e=>setName(e.target.value)} placeholder="例如：王小明" />
-              </div>
-              <div className="flex items-end justify-end gap-2">
-                <button onClick={resetBreakdown} className="px-3 py-2 border rounded">重設明細</button>
-                <button onClick={addEntry} className="px-4 py-2 rounded bg-red-600 text-white">新增記錄</button>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex justify-between items-center">
-            <div className="font-semibold">記錄列表（儲存在本機）</div>
-            <button onClick={exportCSV} className="px-3 py-2 rounded border">匯出 CSV</button>
-          </div>
-          <div className="space-y-2">
-            {entries.length === 0 && <div className="text-sm text-gray-500">目前尚無資料</div>}
-            {entries.map(e => (
-              <div key={e.id} className="p-3 border rounded-md">
-                <div className="flex items-center justify-between">
-                  <div className="font-medium">#{e.code} · {e.name || '（未填名）'} · 總額 <span className="mono">${e.total}</span></div>
-                  <button className="text-sm text-red-600" onClick={()=>{
-                    const next = entries.filter(x => x.id !== e.id);
-                    setEntries(next); saveEntries(next);
-                  }}>刪除</button>
-                </div>
-                <div className="text-xs text-gray-500">{new Date(e.dateISO).toLocaleString()}</div>
-                <div className="text-xs text-gray-600 mt-1">
-                  明細：$100×{e.c100}、$200×{e.c200}、$500×{e.c500}、$1000×{e.c1000}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      );
+        for (const v of all) breakdown[v]++;
+        if (all.length===0) alert('未偵測到面額，請調整拍攝距離與光線。');
+        renderChips(); updateSum();
+      } catch (e) {
+        alert('辨識失敗：' + e.message);
+      } finally {
+        busy(false);
+      }
     }
 
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App/>);
+    // ---------- List & CSV ----------
+    function renderList(){
+      listEl.innerHTML = '';
+      if (entries.length === 0){
+        const p = document.createElement('div'); p.className='text-sm text-gray-500'; p.textContent='目前尚無資料'; listEl.appendChild(p); return;
+      }
+      for (const e of entries){
+        const div = document.createElement('div'); div.className='p-3 border rounded-md';
+        div.innerHTML = `<div class="flex items-center justify-between">
+          <div class="font-medium">#${e.code} · ${e.name || '（未填名）'} · 總額 <span class="mono">$${e.total}</span></div>
+          <button class="text-sm text-red-600">刪除</button>
+        </div>
+        <div class="text-xs text-gray-500">${new Date(e.dateISO).toLocaleString()}</div>
+        <div class="text-xs text-gray-600 mt-1">明細：$100×${e.c100}、$200×${e.c200}、$500×${e.c500}、$1000×${e.c1000}</div>`;
+        div.querySelector('button').addEventListener('click', ()=>{
+          entries = entries.filter(x=>x.id!==e.id); saveEntries(entries); renderList();
+        });
+        listEl.appendChild(div);
+      }
+    }
+    renderList();
+
+    addBtn.addEventListener('click', ()=>{
+      const total = breakdown[100]*100 + breakdown[200]*200 + breakdown[500]*500 + breakdown[1000]*1000;
+      if (total === 0){ alert('尚未辨識到任何面額'); return; }
+      const now = new Date();
+      const entry = {
+        id: now.getTime(), dateISO: now.toISOString(), code: seq, name: nameEl.value || '',
+        total, c100:breakdown[100], c200:breakdown[200], c500:breakdown[500], c1000:breakdown[1000]
+      };
+      entries = [entry, ...entries]; saveEntries(entries); renderList();
+      seq += 1; saveSeq(seq); seqBadge.textContent = '編碼：' + seq;
+      nameEl.value=''; resetBreakdown();
+    });
+
+    exportBtn.addEventListener('click', ()=>{
+      const header = ['日期','編碼','名字','總張數','總金額','100張','200張','500張','1000張'];
+      const rows = entries.map(e => [
+        new Date(e.dateISO).toLocaleString(),
+        e.code, e.name || '', (e.c100+e.c200+e.c500+e.c1000),
+        e.total, e.c100, e.c200, e.c500, e.c1000
+      ]);
+      const csv = [header, ...rows].map(r => r.map(x => `"${(x??'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
+      const url = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8;'}));
+      const a = Object.assign(document.createElement('a'), { href:url, download:`giftbook_${new Date().toISOString().slice(0,10)}.csv` });
+      document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    });
+
+    // ---------- SW ----------
+    if ('serviceWorker' in navigator){
+      navigator.serviceWorker.register(basePath + 'service-worker.js', { scope: basePath });
+    }
   </script>
 </body>
 </html>

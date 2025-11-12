@@ -1,5 +1,5 @@
 // service-worker.js
-const VERSION = 'v2.2.0';
+const VERSION = 'v2.4.0';
 
 function url(p){ return new URL(p, self.registration.scope).toString(); }
 
@@ -11,10 +11,13 @@ const APP_SHELL = [
   url('./icon-512.png')
 ];
 
+const RUNTIME_LOCAL_DIRS = [
+  'vendor/',
+  'models/'
+];
+
 const CROSS_ORIGIN_CACHE_HOSTS = [
-  'unpkg.com',
   'cdn.tailwindcss.com',
-  'cdn.jsdelivr.net'
 ];
 
 self.addEventListener('install', (e) => {
@@ -47,6 +50,17 @@ self.addEventListener('fetch', (e) => {
   }
 
   if (u.origin !== location.origin) return;
+
+  // /vendor or /models -> cache-first
+  if (RUNTIME_LOCAL_DIRS.some(dir => u.pathname.includes('/' + dir))) {
+    e.respondWith(
+      caches.match(req).then(cached => cached || fetch(req).then(res => {
+        caches.open(`assets-${VERSION}`).then(c => c.put(req, res.clone()));
+        return res;
+      }))
+    );
+    return;
+  }
 
   if (req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html')) {
     e.respondWith(
