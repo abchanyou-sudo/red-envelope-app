@@ -17,6 +17,7 @@
     .mono { font-family: ui-monospace, Menlo, Monaco, Consolas, 'Courier New', monospace; }
     .chip { display:inline-block; padding:.2rem .5rem; border:1px solid #eee; border-radius:.5rem; margin-right:.4rem; margin-bottom:.3rem; }
   </style>
+  <!-- Tesseract.js v5 -->
   <script src="https://unpkg.com/tesseract.js@5.0.5/dist/tesseract.min.js"></script>
 </head>
 <body class="bg-white text-gray-800">
@@ -28,6 +29,7 @@
         <span id="seq" class="badge bg-gray-100 text-gray-700">編碼：1</span>
       </div>
     </div>
+
     <details class="p-3 border rounded-md">
       <summary class="cursor-pointer">說明（展開）</summary>
       <ul class="text-sm text-gray-600 mt-2 list-disc pl-5 space-y-1">
@@ -36,6 +38,7 @@
         <li>相機或相簿選圖；新增記錄「編碼 +1」。</li>
       </ul>
     </details>
+
     <div class="p-3 border rounded-lg space-y-2">
       <div class="font-semibold">相片/相機（一次多張）</div>
       <div class="flex gap-2 flex-wrap">
@@ -55,6 +58,7 @@
       <canvas id="canvas" class="hidden"></canvas>
       <div id="busy" class="text-sm text-gray-500 hidden">載入/辨識中...</div>
     </div>
+
     <div class="p-3 border rounded-lg space-y-3">
       <div class="font-semibold">辨識結果（可手動調整）</div>
       <div id="chips" class="flex flex-wrap gap-2"></div>
@@ -70,13 +74,16 @@
         </div>
       </div>
     </div>
+
     <div class="flex justify-between items-center">
       <div class="font-semibold">記錄列表（儲存在本機）</div>
       <button id="export" class="px-3 py-2 rounded border">匯出 CSV</button>
     </div>
     <div id="list" class="space-y-2"></div>
   </div>
+
   <script>
+    // ---------- BasePath & Manifest ----------
     function detectBasePath(){
       const parts = location.pathname.split('/').filter(Boolean);
       return parts.length === 0 ? '/' : '/' + parts[0] + '/';
@@ -86,8 +93,12 @@
       const manifest = {
         name: "紅包記帳系統",
         short_name: "紅包記帳",
-        start_url: basePath, scope: basePath, display: "standalone",
-        background_color: "#ffffff", theme_color: "#dc2626", orientation: "portrait",
+        start_url: basePath,
+        scope: basePath,
+        display: "standalone",
+        background_color: "#ffffff",
+        theme_color: "#dc2626",
+        orientation: "portrait",
         icons: [
           { src: basePath + "icon-192.png", sizes: "192x192", type: "image/png", purpose: "any maskable" },
           { src: basePath + "icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" }
@@ -99,6 +110,7 @@
       document.getElementById('apple-512').setAttribute('href', basePath + 'icon-512.png');
     })();
 
+    // ---------- Storage ----------
     const STORAGE_ENTRIES = 'giftbook-entries';
     const STORAGE_SEQ = 'giftbook-seq';
     const loadEntries = () => { try { return JSON.parse(localStorage.getItem(STORAGE_ENTRIES) || '[]'); } catch { return []; } };
@@ -106,6 +118,7 @@
     const loadSeq = () => { const n = parseInt(localStorage.getItem(STORAGE_SEQ) || '1', 10); return isNaN(n) ? 1 : n; };
     const saveSeq = (n) => localStorage.setItem(STORAGE_SEQ, String(n));
 
+    // ---------- UI refs ----------
     const net = document.getElementById('net');
     const seqBadge = document.getElementById('seq');
     const busyEl = document.getElementById('busy');
@@ -132,6 +145,7 @@
     let seq = loadSeq(); seqBadge.textContent = '編碼：' + seq;
     let entries = loadEntries();
 
+    // ---------- Breakdown state ----------
     const ALLOWED = [100,200,500,1000];
     const CN_MAP = { "壹佰":100, "貳佰":200, "伍佰":500, "壹仟":1000, "壹百":100, "貳百":200, "伍百":500, "壹千":1000 };
     let breakdown = {100:0,200:0,500:0,1000:0};
@@ -158,6 +172,7 @@
     function resetBreakdown(){ breakdown = {100:0,200:0,500:0,1000:0}; renderChips(); updateSum(); }
     renderChips(); updateSum();
 
+    // ---------- Camera helpers ----------
     let stream = null;
     async function openCamera(){
       try{
@@ -188,32 +203,37 @@
       const r = new FileReader(); r.onload = async ()=>{ await run(r.result); }; r.readAsDataURL(f); e.target.value='';
     });
 
+    // ---------- Tesseract v5 API ----------
     const TESS_LANG_CDN = 'https://cdn.jsdelivr.net/gh/tesseract-ocr/tessdata@main';
     let worker = null;
     async function ensureWorker(){
       if (worker) return worker;
-      worker = Tesseract.createWorker({ langPath: TESS_LANG_CDN, gzip:false });
-      await worker.load();
-      await worker.loadLanguage('chi_tra');
-      await worker.initialize('chi_tra');
+      // v5: createWorker(language, concurrency, options)
+      worker = await Tesseract.createWorker('chi_tra', 1, {
+        langPath: TESS_LANG_CDN,
+        gzip: false
+      });
       return worker;
     }
+
     function extractAll(text){
       const found=[];
       for (const [k,v] of Object.entries(CN_MAP)){
         const re=new RegExp(k,'g'); const m=text.match(re); if(m) for(let i=0;i<m.length;i++) found.push(v);
       }
-      let cleaned = text.replace(/[,\s]/g,'').replace(/NTD|TWD|NT|\$|元|圓|塊|元整/g,'').replace(/[Oo]/g,'0').replace(/[Il]/g,'1');
+      let cleaned = text.replace(/[,\s]/g,'').replace(/NTD|TWD|NT|＄|\$|元|圓|塊|元整/g,'').replace(/[Oo]/g,'0').replace(/[Il]/g,'1');
       const m2 = cleaned.match(/\d{3,4}/g) || [];
       for(const t of m2){ const n=parseInt(t,10); if(ALLOWED.includes(n)) found.push(n); }
       return found;
     }
+
     function busy(v){ busyEl.classList.toggle('hidden', !v); }
 
     async function run(dataUrl){
       busy(true);
       try {
         const w = await ensureWorker();
+        // 兩次策略：先數字，再一般
         await w.setParameters({ tessedit_char_whitelist:'0123456789', tessedit_pageseg_mode:'6' });
         const r1 = await w.recognize(dataUrl);
         await w.setParameters({ tessedit_char_whitelist:'', tessedit_pageseg_mode:'6' });
@@ -232,6 +252,7 @@
       }
     }
 
+    // ---------- List & CSV ----------
     function renderList(){
       listEl.innerHTML = '';
       if (entries.length === 0){
@@ -279,6 +300,7 @@
       document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
     });
 
+    // ---------- SW ----------
     if ('serviceWorker' in navigator){
       navigator.serviceWorker.register(basePath + 'service-worker.js', { scope: basePath });
     }

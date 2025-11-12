@@ -1,5 +1,5 @@
 // service-worker.js
-const VERSION = 'v2.5.0';
+const VERSION = 'v2.5.1';
 function url(p){ return new URL(p, self.registration.scope).toString(); }
 const APP_SHELL = [ url('./'), url('./index.html'), url('./offline.html'), url('./icon-192.png'), url('./icon-512.png') ];
 const CROSS_ORIGIN_CACHE_HOSTS = [ 'unpkg.com', 'cdn.jsdelivr.net' ];
